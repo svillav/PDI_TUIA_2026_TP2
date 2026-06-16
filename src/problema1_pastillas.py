@@ -95,11 +95,10 @@ pastillas = [
 imshow(mascara_pastillas, title=f"B) {len(pastillas)} pastillas segmentadas")
 
 
-# === C) CLASIFICACIÓN, CONTEO Y DIBUJADO (un solo recorrido) ======================
-# FORMA: relacion_aspecto y llenado del rectangulo minimo rotado (U7).
-# COLOR: porcentajes de pixeles por banda de tono/saturacion en HSV (U5).
-# Optimizacion: calculamos la mascara UNA SOLA VEZ sobre el bounding box de cada
-# pastilla (no sobre la imagen completa). Asi forma y color comparten esa mascara.
+# === C) CLASIFICACIÓN, CONTEO Y DIBUJADO ======================
+# FORMA: relacion_aspecto y llenado del rectangulo minimo rotado.
+# COLOR: porcentajes de pixeles por banda de tono/saturacion en HSV.
+# Optimizacion: calculamos la mascara sobre el bounding box de cada pastilla.
 
 TIPOS = {
     ('Redonda', 'Blanca'): ('RB', (0, 180, 0)),
@@ -148,7 +147,7 @@ def clasificar_color(tono_px, sat_px):
         return 'Blanca'
 
 
-# Recorrido unico: clasifica, cuenta y dibuja
+# Clasificación, conteo y visualización
 conteo = Counter()
 contador_por_tipo = defaultdict(int)
 imagen_salida = imagen_bgr.copy()
@@ -156,19 +155,19 @@ escala_fuente = ANCHO / 1600.0
 grosor_linea = max(1, int(2 * escala_fuente))
 
 for id_pastilla in pastillas:
-    # Bounding box de la pastilla (las stats ya las teniamos calculadas)
+    # Bounding box de la pastilla
     x = estadisticas[id_pastilla, cv2.CC_STAT_LEFT]
     y = estadisticas[id_pastilla, cv2.CC_STAT_TOP]
     w = estadisticas[id_pastilla, cv2.CC_STAT_WIDTH]
     h = estadisticas[id_pastilla, cv2.CC_STAT_HEIGHT]
 
-    # Mascara local (solo dentro del bounding box) -> mucho mas rapido que (etiquetas == id)
+    # Mascara local
     mascara_local = (etiquetas[y:y+h, x:x+w] == id_pastilla).astype(np.uint8)
 
-    # Forma (sobre la mascara local)
+    # Forma
     forma = clasificar_forma(mascara_local)
 
-    # Color (reutilizamos la mascara local, sin recorrer la imagen completa)
+    # Color
     mascara_bool = mascara_local.astype(bool)
     tono_px = tono[y:y+h, x:x+w][mascara_bool]
     sat_px = saturacion[y:y+h, x:x+w][mascara_bool]
@@ -180,7 +179,7 @@ for id_pastilla in pastillas:
     contador_por_tipo[codigo] += 1
     etiqueta = f"{codigo}{contador_por_tipo[codigo]}"
 
-    # Dibujado
+    # Visualización
     cv2.rectangle(imagen_salida, (x, y), (x + w, y + h), color_bgr, 2)
     cv2.putText(
         imagen_salida, etiqueta, (x, y - 6),
