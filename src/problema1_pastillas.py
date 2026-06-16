@@ -38,9 +38,9 @@ area_imagen = ALTO * ANCHO
 
 
 # === A) SEGMENTAR LA CINTA (ROI) ====================================================
-# Histograma + suavizado para detectar el pico (moda) de la cinta
+# Histograma + suavizado para detectar el pico (moda) de la cinta.
 # La cinta es la gran region de gris medio. Como ocupa casi toda la foto, es el pico
-# (moda) del histograma: tomo la banda de grises alrededor de ese pico (mientras siga por
+# del histograma: tomo la banda de grises alrededor de ese pico (mientras siga por
 # encima del 15% de su altura). Asi el rango sale automatico, sin valores "a ojo".
 histograma = cv2.calcHist([gris], [0], None, [256], [0, 256]).flatten()
 histograma_suave = cv2.GaussianBlur(histograma, (1, 9), 0).flatten()
@@ -70,7 +70,7 @@ imshow(roi_cinta * 255, title="A) ROI de la cinta")
 
 
 # === B) DETECTAR Y SEGMENTAR PASTILLAS ==============================================
-# Máscara: pastillas son brillantes (blancas) o saturadas (coloreadas), dentro de la ROI
+# Máscara: pastillas son brillantes (blancas) o saturadas (coloreadas), dentro de la ROI.
 # El fondo es gris oscuro (valor~76, saturacion~4). La mitad azul de las capsulas es
 # oscura -> la salva la saturacion. El umbral de brillo se deriva del fondo de la cinta.
 umbral_brillo = int(valor[cinta == 1].mean() + 45)
@@ -95,43 +95,12 @@ pastillas = [
 imshow(mascara_pastillas, title=f"B) {len(pastillas)} pastillas segmentadas")
 
 
-# === C) CLASIFICACIÓN POR FORMA Y COLOR =============================================
-# FORMA (descriptores invariantes a escala/rotacion):
-#   relacion_aspecto = lado mayor/menor del rect. rotado -> alargada (>1.75) = capsula
-#   llenado_rect = area / area del rect. rotado -> cuadrada ~0.9 / redonda ~0.785
-# COLOR (HSV dentro de la pastilla): saturacion baja=blanca; tono rojo/amarillo/azul=rosa/amarilla/azul
-def clasificar_forma(id_pastilla):
-    mascara = (etiquetas == id_pastilla).astype(np.uint8)
-    contornos, _ = cv2.findContours(mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    contorno = max(contornos, key=cv2.contourArea)
-    area = cv2.contourArea(contorno)
-    (_, _), (lado_a, lado_b), _ = cv2.minAreaRect(contorno)
+# === C) CLASIFICACIÓN, CONTEO Y DIBUJADO (un solo recorrido) ======================
+# FORMA: relacion_aspecto y llenado del rectangulo minimo rotado (U7).
+# COLOR: porcentajes de pixeles por banda de tono/saturacion en HSV (U5).
+# Optimizacion: calculamos la mascara UNA SOLA VEZ sobre el bounding box de cada
+# pastilla (no sobre la imagen completa). Asi forma y color comparten esa mascara.
 
-    relacion_aspecto = max(lado_a, lado_b) / max(min(lado_a, lado_b), 1)
-    llenado_rect = area / max(lado_a * lado_b, 1)
-
-    if relacion_aspecto > 1.75:
-        return 'Capsula'
-    elif llenado_rect > 0.86:
-        return 'Cuadrada'
-    else:
-        return 'Redonda'
-
-def clasificar_color(id_pastilla):
-    pixeles = (etiquetas == id_pastilla)
-    tono_px = tono[pixeles]
-    sat_px = saturacion[pixeles]
-
-    if np.mean((tono_px >= 95) & (tono_px <= 135) & (sat_px >= 80)) > 0.10:
-        return 'Azul'
-    elif np.mean((tono_px >= 15) & (tono_px <= 40) & (sat_px >= 60)) > 0.30:
-        return 'Amarilla'
-    elif np.mean(((tono_px <= 10) | (tono_px >= 165)) & (sat_px >= 55)) > 0.30:
-        return 'Rosa'
-    else:
-        return 'Blanca'
-
-# Mapeo (forma, color) -> (código, color BGR para visualizar)
 TIPOS = {
     ('Redonda', 'Blanca'): ('RB', (0, 180, 0)),
     ('Redonda', 'Rosa'): ('RR', (200, 0, 200)),
@@ -148,14 +117,75 @@ DESCRIPCION = {
     'CZ': 'Capsula Azul',
 }
 
-clasificacion = {}
+
+def clasificar_forma(mascara_local):
+    """Determina la forma a partir de la mascara local (bounding box)."""
+    contornos, _ = cv2.findContours(mascara_local, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    contorno = max(contornos, key=cv2.contourArea)
+    area = cv2.contourArea(contorno)
+    (_, _), (lado_a, lado_b), _ = cv2.minAreaRect(contorno)
+
+    relacion_aspecto = max(lado_a, lado_b) / max(min(lado_a, lado_b), 1)
+    llenado_rect = area / max(lado_a * lado_b, 1)
+
+    if relacion_aspecto > 1.75:
+        return 'Capsula'
+    elif llenado_rect > 0.86:
+        return 'Cuadrada'
+    else:
+        return 'Redonda'
+
+
+def clasificar_color(tono_px, sat_px):
+    """Determina el color a partir de los pixeles HSV de la pastilla."""
+    if np.mean((tono_px >= 95) & (tono_px <= 135) & (sat_px >= 80)) > 0.10:
+        return 'Azul'
+    elif np.mean((tono_px >= 15) & (tono_px <= 40) & (sat_px >= 60)) > 0.30:
+        return 'Amarilla'
+    elif np.mean(((tono_px <= 10) | (tono_px >= 165)) & (sat_px >= 55)) > 0.30:
+        return 'Rosa'
+    else:
+        return 'Blanca'
+
+
+# Recorrido unico: clasifica, cuenta y dibuja
 conteo = Counter()
+contador_por_tipo = defaultdict(int)
+imagen_salida = imagen_bgr.copy()
+escala_fuente = ANCHO / 1600.0
+grosor_linea = max(1, int(2 * escala_fuente))
+
 for id_pastilla in pastillas:
-    forma = clasificar_forma(id_pastilla)
-    color = clasificar_color(id_pastilla)
-    codigo, _ = TIPOS.get((forma, color), (forma[0] + color[0], (0, 0, 255)))
-    clasificacion[id_pastilla] = (forma, color, codigo)
+    # Bounding box de la pastilla (las stats ya las teniamos calculadas)
+    x = estadisticas[id_pastilla, cv2.CC_STAT_LEFT]
+    y = estadisticas[id_pastilla, cv2.CC_STAT_TOP]
+    w = estadisticas[id_pastilla, cv2.CC_STAT_WIDTH]
+    h = estadisticas[id_pastilla, cv2.CC_STAT_HEIGHT]
+
+    # Mascara local (solo dentro del bounding box) -> mucho mas rapido que (etiquetas == id)
+    mascara_local = (etiquetas[y:y+h, x:x+w] == id_pastilla).astype(np.uint8)
+
+    # Forma (sobre la mascara local)
+    forma = clasificar_forma(mascara_local)
+
+    # Color (reutilizamos la mascara local, sin recorrer la imagen completa)
+    mascara_bool = mascara_local.astype(bool)
+    tono_px = tono[y:y+h, x:x+w][mascara_bool]
+    sat_px = saturacion[y:y+h, x:x+w][mascara_bool]
+    color = clasificar_color(tono_px, sat_px)
+
+    # Codigo y color de visualizacion
+    codigo, color_bgr = TIPOS.get((forma, color), (forma[0] + color[0], (0, 0, 255)))
     conteo[codigo] += 1
+    contador_por_tipo[codigo] += 1
+    etiqueta = f"{codigo}{contador_por_tipo[codigo]}"
+
+    # Dibujado
+    cv2.rectangle(imagen_salida, (x, y), (x + w, y + h), color_bgr, 2)
+    cv2.putText(
+        imagen_salida, etiqueta, (x, y - 6),
+        cv2.FONT_HERSHEY_SIMPLEX, escala_fuente, color_bgr, grosor_linea, cv2.LINE_AA
+    )
 
 
 # === D) INFORME POR CONSOLA E IMAGEN ETIQUETADA =====================================
@@ -168,28 +198,6 @@ for codigo in sorted(conteo.keys()):
     descripcion = DESCRIPCION.get(codigo, codigo)
     print(f"   {codigo}  ({descripcion:18s}): {conteo[codigo]}")
 print("=" * 55)
-
-imagen_salida = imagen_bgr.copy()
-contador_por_tipo = defaultdict(int)
-escala_fuente = ANCHO / 1600.0
-grosor_linea = max(1, int(2 * escala_fuente))
-
-for id_pastilla in pastillas:
-    forma, color, codigo = clasificacion[id_pastilla]
-    _, color_bgr = TIPOS.get((forma, color), (codigo, (0, 0, 255)))
-    contador_por_tipo[codigo] += 1
-    etiqueta = f"{codigo}{contador_por_tipo[codigo]}"
-
-    x = estadisticas[id_pastilla, cv2.CC_STAT_LEFT]
-    y = estadisticas[id_pastilla, cv2.CC_STAT_TOP]
-    w = estadisticas[id_pastilla, cv2.CC_STAT_WIDTH]
-    h = estadisticas[id_pastilla, cv2.CC_STAT_HEIGHT]
-
-    cv2.rectangle(imagen_salida, (x, y), (x + w, y + h), color_bgr, 2)
-    cv2.putText(
-        imagen_salida, etiqueta, (x, y - 6),
-        cv2.FONT_HERSHEY_SIMPLEX, escala_fuente, color_bgr, grosor_linea, cv2.LINE_AA
-    )
 
 imshow(
     cv2.cvtColor(imagen_salida, cv2.COLOR_BGR2RGB),
