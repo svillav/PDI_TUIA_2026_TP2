@@ -79,7 +79,7 @@ def detectar_patente(binaria, candidatos, alto_img):
     if not candidatos:
         return None, None, None
 
-    # Altura tipica usando percentil 75 (robusta a ruido de menor tamaño)
+    # Altura tipica usando mediana (robusta a ruido de menor tamaño)
     alto_char_est = estimar_alto_caracter(candidatos)
 
     # Mascara solo con los candidatos validos
