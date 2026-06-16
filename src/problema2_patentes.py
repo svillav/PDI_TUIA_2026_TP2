@@ -58,7 +58,7 @@ def detectar_candidatos(gris):
 
 def estimar_alto_caracter(candidatos):
     """
-    Estima la altura tipica del caracter usando el percentil 75 de las alturas.
+    Estima la altura tipica del caracter usando la mediana de las alturas.
     """
     alturas = np.array([h for (_, _, _, h, _, _) in candidatos])
     if len(alturas) == 0:
